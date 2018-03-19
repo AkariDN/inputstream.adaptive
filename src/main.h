@@ -125,6 +125,7 @@ public:
   bool IsLive() const { return adaptiveTree_->has_timeshift_buffer_; };
   MANIFEST_TYPE GetManifestType() const { return manifest_type_; };
   const AP4_UI08 *GetDefaultKeyId(const uint16_t index) const;
+  const AP4_DataBuffer &GetKeySystem() { return key_system_; };
   uint32_t GetIncludedStreamMask() const;
   CRYPTO_INFO::CRYPTO_KEY_SYSTEM GetCryptoKeySystem() const;
 
@@ -143,6 +144,7 @@ private:
   std::string license_key_, license_type_, license_data_;
   std::map<std::string, std::string> media_headers_;
   AP4_DataBuffer server_certificate_;
+  AP4_DataBuffer key_system_;
   std::string profile_path_;
   void * decrypterModule_;
   SSD::SSD_DECRYPTER *decrypter_;

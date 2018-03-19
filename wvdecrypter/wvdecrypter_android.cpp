@@ -168,7 +168,7 @@ class WV_CencSingleSampleDecrypter : public AP4_CencSingleSampleDecrypter
 {
 public:
   // methods
-  WV_CencSingleSampleDecrypter(WV_DRM &drm, AP4_DataBuffer &pssh, const char *optionalKeyParameter, const uint8_t* defaultKeyId);
+  WV_CencSingleSampleDecrypter(WV_DRM &drm, const AP4_DataBuffer &pssh, const char *optionalKeyParameter, const uint8_t* defaultKeyId);
   ~WV_CencSingleSampleDecrypter();
 
   size_t CreateSession(AP4_DataBuffer &pssh);
@@ -176,8 +176,8 @@ public:
   virtual const char *GetSessionId() override;
   virtual bool HasLicenseKey(const uint8_t *keyid);
 
-  virtual AP4_Result SetFragmentInfo(AP4_UI32 pool_id, const AP4_UI08 *key, const AP4_UI08 nal_length_size, AP4_DataBuffer &annexb_sps_pps, AP4_UI32 flags)override;
-  virtual AP4_UI32 AddPool() override;
+  virtual AP4_Result SetFragmentInfo(AP4_UI32 pool_id, const AP4_UI08 *key, const AP4_UI08 nal_length_size, const AP4_DataBuffer &annexb_sps_pps, AP4_UI32 flags)override;
+  virtual AP4_UI32 AddPool(const AP4_UI08 *key, const AP4_DataBuffer &pssh) override;
   virtual void RemovePool(AP4_UI32 poolid) override;
 
   virtual AP4_Result DecryptSampleData(AP4_UI32 pool_id,
@@ -200,17 +200,26 @@ public:
 
 private:
   bool ProvisionRequest();
+  bool InsertPssh(const AP4_DataBuffer &pssh); //return true if new item was inserted
+  bool PerformKeyRequests();
   bool SendSessionMessage(AMediaDrmByteArray &session_id, const uint8_t* key_request, size_t key_request_size);
 
   WV_DRM &media_drm_;
-  std::string pssh_;
 
   AMediaDrmByteArray session_id_;
   char session_id_char_[128];
+  std::string optionalKeyParameter_;
 
   const uint8_t *key_request_;
   size_t key_request_size_;
   uint8_t defaultKeyId_[16];
+
+  struct PSSH
+  {
+    std::string pssh_;
+    bool invalid;
+  };
+  std::vector<PSSH> pssh_pool_;
 
   struct FINFO
   {
@@ -228,7 +237,7 @@ private:
 |   WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter
 +---------------------------------------------------------------------*/
 
-WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(WV_DRM &drm, AP4_DataBuffer &pssh, const char *optionalKeyParameter, const uint8_t* defaultKeyId)
+WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(WV_DRM &drm, const AP4_DataBuffer &pssh, const char *optionalKeyParameter, const uint8_t* defaultKeyId)
   : AP4_CencSingleSampleDecrypter(0)
   , media_drm_(drm)
   , key_request_(nullptr)
@@ -236,12 +245,6 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(WV_DRM &drm, AP4_Data
   , hdcp_limit_(0)
 {
   SetParentIsOwner(false);
-
-  if (pssh.GetDataSize() > 65535)
-  {
-    Log(SSD_HOST::LL_ERROR, "Init_data with length: %u seems not to be cenc init data!", pssh.GetDataSize());
-    return;
-  }
 
 #ifdef LOCLICENSE
   std::string strDbg = host->GetProfilePath();
@@ -251,7 +254,42 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(WV_DRM &drm, AP4_Data
   fclose(f);
 #endif
 
-  pssh_ = std::string((const char*)pssh.GetData(), pssh.GetDataSize());
+  InsertPssh(pssh);
+
+  if (defaultKeyId)
+    memcpy(defaultKeyId_, defaultKeyId, 16);
+  else
+    memset(defaultKeyId_, 0, 16);
+
+  if (optionalKeyParameter)
+    optionalKeyParameter_ = optionalKeyParameter;
+
+  media_status_t status;
+  memset(&session_id_, 0, sizeof(session_id_));
+
+  if ((status = AMediaDrm_openSession(media_drm_.GetMediaDrm(), &session_id_)) != AMEDIA_OK)
+  {
+    Log(SSD_HOST::LL_ERROR, "Unable to open DRM session (%d)", status);
+    return;
+  }
+
+  if (PerformKeyRequests())
+  {
+    memcpy(session_id_char_, session_id_.ptr, session_id_.length);
+    session_id_char_[session_id_.length] = 0;
+  }
+  else
+    //AMediaDrm_closeSession(media_drm_.GetMediaDrm(), &session_id_);
+    memset(&session_id_, 0, sizeof(session_id_));
+}
+
+WV_CencSingleSampleDecrypter::~WV_CencSingleSampleDecrypter()
+{
+}
+
+bool WV_CencSingleSampleDecrypter::InsertPssh(const AP4_DataBuffer &pssh)
+{
+  std::string pssh_str = std::string((const char*)pssh.GetData(), pssh.GetDataSize());
 
   if (memcmp(pssh.GetData() + 4, "pssh", 4) != 0)
   {
@@ -261,87 +299,75 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(WV_DRM &drm, AP4_Data
     memcpy(atom+12, media_drm_.GetKeySystem(), 16);
     memset(atom+28, 0, 4);
 
-    pssh_.insert(0, std::string(reinterpret_cast<const char*>(atom), sizeof(atom)));
+    pssh_str.insert(0, std::string(reinterpret_cast<const char*>(atom), sizeof(atom)));
 
-    pssh_[3] = static_cast<uint8_t>(pssh_.size());
-    pssh_[2] = static_cast<uint8_t>(pssh_.size() >> 8);
+    pssh_str[3] = static_cast<uint8_t>(pssh_str.size());
+    pssh_str[2] = static_cast<uint8_t>(pssh_str.size() >> 8);
 
-    pssh_[sizeof(atom) - 1] = static_cast<uint8_t>(pssh_.size()) - sizeof(atom);
-    pssh_[sizeof(atom) - 2] = static_cast<uint8_t>((pssh_.size() - sizeof(atom)) >> 8);
+    pssh_str[sizeof(atom) - 1] = static_cast<uint8_t>(pssh_str.size()) - sizeof(atom);
+    pssh_str[sizeof(atom) - 2] = static_cast<uint8_t>((pssh_str.size() - sizeof(atom)) >> 8);
   }
 
-  if (defaultKeyId)
-    memcpy(defaultKeyId_, defaultKeyId, 16);
-  else
-    memset(defaultKeyId_, 0, 16);
+  for (const auto &pool : pssh_pool_)
+    if (pool.pssh_ == pssh_str)
+      return false;
 
-  media_status_t status;
-
-  bool retry(false);
-  size_t old_key_request_size(0);
-
-SESSIONAGIN:
-  memset(&session_id_, 0, sizeof(session_id_));
-  if ((status = AMediaDrm_openSession(media_drm_.GetMediaDrm(), &session_id_)) != AMEDIA_OK)
-  {
-    Log(SSD_HOST::LL_ERROR, "Unable to open DRM session (%d)", status);
-    return;
-  }
-
-TRYAGAIN:
-  if (needProvision && !ProvisionRequest())
-  {
-    Log(SSD_HOST::LL_ERROR, "Unable to generate a license (provision failed)");
-    goto FAILWITHSESSION;
-  }
-  needProvision = false;
-
-  AMediaDrmKeyValuePair kv;
-  kv.mKey = "PRCustomData";
-  kv.mValue = optionalKeyParameter;
-
-  status = AMediaDrm_getKeyRequest(media_drm_.GetMediaDrm(), &session_id_,
-    reinterpret_cast<const uint8_t*>(pssh_.data()), pssh_.size(), "video/mp4", KEY_TYPE_STREAMING,
-    &kv, (optionalKeyParameter != nullptr) ? 1 : 0 , &key_request_, &key_request_size_);
-
-  if (status != AMEDIA_OK || !key_request_size_)
-  {
-    Log(SSD_HOST::LL_ERROR, "Key request not successful (%d)", status);
-    if (needProvision)
-      goto TRYAGAIN;
-    else
-      goto FAILWITHSESSION;
-  }
-
-  Log(SSD_HOST::LL_DEBUG, "Key request successful, size: %u, oldsize: %u", static_cast<unsigned int>(key_request_size_), static_cast<unsigned int>(old_key_request_size));
-
-  if (!SendSessionMessage(session_id_, key_request_, key_request_size_ - old_key_request_size))
-    goto FAILWITHSESSION;
-
-  Log(SSD_HOST::LL_DEBUG, "License update successful");
-
-  if (retry)
-  {
-    retry = false;
-    old_key_request_size = key_request_size_;
-    goto SESSIONAGIN;
-  }
-
-  memcpy(session_id_char_, session_id_.ptr, session_id_.length);
-  session_id_char_[session_id_.length] = 0;
-
-  return;
-
-
-FAILWITHSESSION:
-  //AMediaDrm_closeSession(media_drm_.GetMediaDrm(), &session_id_);
-  memset(&session_id_, 0, sizeof(session_id_));
-
-  return;
+#ifdef LOCLICENSE
+  std::string strDbg = host->GetProfilePath();
+  strDbg += "EDEF8BA9-79D6-4ACE-A3C8-27DCD51D21ED_";
+  strDbg += std::to_string(pssh_pool_.size());
+  strDbg += ".init";
+  FILE*f = fopen(strDbg.c_str(), "wb");
+  fwrite(pssh.GetData(), 1, pssh.GetDataSize(), f);
+  fclose(f);
+#endif
+  pssh_pool_.push_back(PSSH());
+  pssh_pool_.back().invalid = true;
+  pssh_pool_.back().pssh_ = pssh_str;
+  return true;
 }
 
-WV_CencSingleSampleDecrypter::~WV_CencSingleSampleDecrypter()
+bool WV_CencSingleSampleDecrypter::PerformKeyRequests()
 {
+  for (auto &pool : pssh_pool_)
+  {
+    if (pool.invalid)
+    {
+      pool.invalid = false;
+TRYAGAIN:
+      if (needProvision && !ProvisionRequest())
+      {
+        Log(SSD_HOST::LL_ERROR, "Unable to generate a license (provision failed)");
+        return false;
+      }
+      needProvision = false;
+
+      AMediaDrmKeyValuePair kv;
+      kv.mKey = "PRCustomData";
+      kv.mValue = optionalKeyParameter_.data();
+
+      media_status_t status = AMediaDrm_getKeyRequest(media_drm_.GetMediaDrm(), &session_id_,
+        reinterpret_cast<const uint8_t*>(pool.pssh_.data()), pool.pssh_.size(), "video/mp4", KEY_TYPE_STREAMING,
+        &kv, (optionalKeyParameter_.empty()) ? 0 : 1 , &key_request_, &key_request_size_);
+
+      if (status != AMEDIA_OK || !key_request_size_)
+      {
+        Log(SSD_HOST::LL_ERROR, "Key request not successful (%d)", status);
+        if (needProvision)
+          goto TRYAGAIN;
+        else
+          return false;
+      }
+
+      Log(SSD_HOST::LL_DEBUG, "Key request successful, size");
+
+      if (!SendSessionMessage(session_id_, key_request_, key_request_size_))
+        return false;
+
+      Log(SSD_HOST::LL_DEBUG, "License update successful");
+    }
+  }
+  return true;
 }
 
 const char *WV_CencSingleSampleDecrypter::GetSessionId()
@@ -684,7 +710,7 @@ SSMFAIL:
 +---------------------------------------------------------------------*/
 
 AP4_Result WV_CencSingleSampleDecrypter::SetFragmentInfo(AP4_UI32 pool_id, const AP4_UI08 *key,
-  const AP4_UI08 nal_length_size, AP4_DataBuffer &annexb_sps_pps, AP4_UI32 flags)
+  const AP4_UI08 nal_length_size, const AP4_DataBuffer &annexb_sps_pps, AP4_UI32 flags)
 {
   if (pool_id >= fragment_pool_.size())
     return AP4_ERROR_OUT_OF_RANGE;
@@ -697,8 +723,12 @@ AP4_Result WV_CencSingleSampleDecrypter::SetFragmentInfo(AP4_UI32 pool_id, const
   return AP4_SUCCESS;
 }
 
-AP4_UI32 WV_CencSingleSampleDecrypter::AddPool()
+AP4_UI32 WV_CencSingleSampleDecrypter::AddPool(const AP4_UI08 *key, const AP4_DataBuffer &pssh)
 {
+  // Check if new pssh init_data has arrived, if so request keys
+  if (InsertPssh(pssh))
+    PerformKeyRequests();
+
   for (size_t i(0); i < fragment_pool_.size(); ++i)
     if (fragment_pool_[i].nal_length_size_ == 99)
     {
@@ -876,7 +906,7 @@ public:
     return cdmsession_->GetMediaDrm();
   }
 
-  virtual AP4_CencSingleSampleDecrypter *CreateSingleSampleDecrypter(AP4_DataBuffer &pssh, const char *optionalKeyParameter, const uint8_t *defaultkeyid) override
+  virtual AP4_CencSingleSampleDecrypter *CreateSingleSampleDecrypter(const AP4_DataBuffer &pssh, const char *optionalKeyParameter, const uint8_t *defaultkeyid) override
   {
     WV_CencSingleSampleDecrypter *decrypter = new WV_CencSingleSampleDecrypter(*cdmsession_, pssh, optionalKeyParameter, defaultkeyid);
     if (!decrypter->GetSessionId())

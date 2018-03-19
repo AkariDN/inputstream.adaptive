@@ -818,7 +818,7 @@ class FragmentedSampleReader : public SampleReader, public AP4_LinearReader
 public:
 
   FragmentedSampleReader(AP4_ByteStream *input, AP4_Movie *movie, AP4_Track *track, AP4_UI32 streamId,
-    AP4_CencSingleSampleDecrypter *ssd, const SSD::SSD_DECRYPTER::SSD_CAPS &dcaps)
+    AP4_CencSingleSampleDecrypter *ssd, const SSD::SSD_DECRYPTER::SSD_CAPS &dcaps, const AP4_DataBuffer &keySystem)
     : AP4_LinearReader(*movie, input)
     , m_track(track)
     , m_streamId(streamId)
@@ -843,9 +843,20 @@ public:
     EnableTrack(m_track->GetId());
 
     AP4_SampleDescription *desc(m_track->GetSampleDescription(0));
+    AP4_DataBuffer init_data;
     if (desc->GetType() == AP4_SampleDescription::TYPE_PROTECTED)
     {
       m_protectedDesc = static_cast<AP4_ProtectedSampleDescription*>(desc);
+
+      //Initialization may have selected other stream than played - give cdm a chance to fetch keys
+      AP4_Array<AP4_PsshAtom*>& pssh = movie->GetPsshAtoms();
+
+      for (unsigned int i = 0; !init_data.GetDataSize() && i < pssh.ItemCount(); i++)
+        if (memcmp(pssh[i]->GetSystemId(), keySystem.GetData(), 16) == 0)
+        {
+          init_data.AppendData(pssh[i]->GetData().GetData(), pssh[i]->GetData().GetDataSize());
+          break;
+        }
 
       AP4_ContainerAtom *schi;
       if (m_protectedDesc->GetSchemeInfo() && (schi = m_protectedDesc->GetSchemeInfo()->GetSchiAtom()))
@@ -862,7 +873,7 @@ public:
       }
     }
     if (m_singleSampleDecryptor)
-      m_poolId = m_singleSampleDecryptor->AddPool();
+      m_poolId = m_singleSampleDecryptor->AddPool(m_defaultKey, init_data);
 
     m_timeBaseExt = DVD_TIME_BASE;
     m_timeBaseInt = m_track->GetMediaTimeScale();
@@ -1787,6 +1798,19 @@ bool Session::initialize()
       return false;
     }
 
+    std::string strkey(adaptiveTree_->supportedKeySystem_.substr(9));
+    size_t pos;
+    while ((pos = strkey.find('-')) != std::string::npos)
+      strkey.erase(pos, 1);
+    if (strkey.size() != 32)
+    {
+      kodi::Log(ADDON_LOG_ERROR, "Key system mismatch (%s)!", adaptiveTree_->supportedKeySystem_.c_str());
+      return false;
+    }
+    kodi::Log(ADDON_LOG_DEBUG, "Use key system: %s", adaptiveTree_->supportedKeySystem_.c_str());
+    key_system_.SetDataSize(16);
+    AP4_ParseHex(strkey.c_str(), key_system_.UseData(), 16);
+
     for (size_t ses(1); ses < cdm_sessions_.size(); ++ses)
     {
       AP4_DataBuffer init_data;
@@ -1798,19 +1822,6 @@ bool Session::initialize()
 
         if (license_data_.empty())
         {
-          std::string strkey(adaptiveTree_->supportedKeySystem_.substr(9));
-          size_t pos;
-          while ((pos = strkey.find('-')) != std::string::npos)
-            strkey.erase(pos, 1);
-          if (strkey.size() != 32)
-          {
-            kodi::Log(ADDON_LOG_ERROR, "Key system mismatch (%s)!", adaptiveTree_->supportedKeySystem_.c_str());
-            return false;
-          }
-
-          unsigned char key_system[16];
-          AP4_ParseHex(strkey.c_str(), key_system, 16);
-
           Session::STREAM stream(*adaptiveTree_, adaptiveTree_->GetAdaptationSet(0)->type_);
           stream.stream_.prepare_stream(adaptiveTree_->GetAdaptationSet(0), 0, 0, 0, 0, 0, 0, 0, std::map<std::string, std::string>());
 
@@ -1831,7 +1842,7 @@ bool Session::initialize()
 
           for (unsigned int i = 0; !init_data.GetDataSize() && i < pssh.ItemCount(); i++)
           {
-            if (memcmp(pssh[i]->GetSystemId(), key_system, 16) == 0)
+            if (memcmp(pssh[i]->GetSystemId(), key_system_.GetData(), 16) == 0)
             {
               init_data.AppendData(pssh[i]->GetData().GetData(), pssh[i]->GetData().GetDataSize());
               if (adaptiveTree_->psshSets_[ses].defaultKID_.empty())
@@ -2691,7 +2702,7 @@ bool CInputStreamAdaptive::OpenStream(int streamid)
 
     stream->reader_ = new FragmentedSampleReader(stream->input_, movie, track, streamid,
       m_session->GetSingleSampleDecryptor(stream->stream_.getRepresentation()->pssh_set_),
-      m_session->GetDecrypterCaps(stream->stream_.getRepresentation()->pssh_set_));
+      m_session->GetDecrypterCaps(stream->stream_.getRepresentation()->pssh_set_), m_session->GetKeySystem());
   }
   else
   {

@@ -240,7 +240,7 @@ class WV_CencSingleSampleDecrypter : public AP4_CencSingleSampleDecrypter
 {
 public:
   // methods
-  WV_CencSingleSampleDecrypter(WV_DRM &drm, AP4_DataBuffer &pssh, const uint8_t *defaultKeyId);
+  WV_CencSingleSampleDecrypter(WV_DRM &drm, const AP4_DataBuffer &pssh, const uint8_t *defaultKeyId);
   virtual ~WV_CencSingleSampleDecrypter();
 
   void GetCapabilities(const uint8_t* key, uint32_t media, SSD_DECRYPTER::SSD_CAPS &caps);
@@ -264,8 +264,8 @@ public:
   bool HasKeyId(const uint8_t *keyid);
 
   virtual AP4_Result SetFragmentInfo(AP4_UI32 pool_id, const AP4_UI08 *key, const AP4_UI08 nal_length_size,
-    AP4_DataBuffer &annexb_sps_pps, AP4_UI32 flags)override;
-  virtual AP4_UI32 AddPool() override;
+    const AP4_DataBuffer &annexb_sps_pps, AP4_UI32 flags)override;
+  virtual AP4_UI32 AddPool(const AP4_UI08 *key, const AP4_DataBuffer &pssh) override;
   virtual void RemovePool(AP4_UI32 poolid) override;
 
 
@@ -466,7 +466,7 @@ void WV_DRM::OnCDMMessage(const char* session, uint32_t session_size, CDMADPMSG 
 |   WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter
 +---------------------------------------------------------------------*/
 
-WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(WV_DRM &drm, AP4_DataBuffer &pssh, const uint8_t *defaultKeyId)
+WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(WV_DRM &drm, const AP4_DataBuffer &pssh, const uint8_t *defaultKeyId)
   : AP4_CencSingleSampleDecrypter(0)
   , drm_(drm)
   , pssh_(pssh)
@@ -591,7 +591,7 @@ void WV_CencSingleSampleDecrypter::GetCapabilities(const uint8_t* key, uint32_t 
 
   if (caps.flags == SSD_DECRYPTER::SSD_CAPS::SSD_SUPPORTS_DECODING)
   {
-    AP4_UI32 poolid(AddPool());
+    AP4_UI32 poolid(AddPool(nullptr, AP4_DataBuffer()));
     fragment_pool_[poolid].key_ = key ? key : reinterpret_cast<const uint8_t*>(keys_.front().keyid.data());
 
     AP4_DataBuffer in, out;
@@ -910,7 +910,7 @@ bool WV_CencSingleSampleDecrypter::HasKeyId(const uint8_t *keyid)
   return false;
 }
 
-AP4_Result WV_CencSingleSampleDecrypter::SetFragmentInfo(AP4_UI32 pool_id, const AP4_UI08 *key, const AP4_UI08 nal_length_size, AP4_DataBuffer &annexb_sps_pps, AP4_UI32 flags)
+AP4_Result WV_CencSingleSampleDecrypter::SetFragmentInfo(AP4_UI32 pool_id, const AP4_UI08 *key, const AP4_UI08 nal_length_size, const AP4_DataBuffer &annexb_sps_pps, AP4_UI32 flags)
 {
   if (pool_id >= fragment_pool_.size())
     return AP4_ERROR_OUT_OF_RANGE;
@@ -923,7 +923,7 @@ AP4_Result WV_CencSingleSampleDecrypter::SetFragmentInfo(AP4_UI32 pool_id, const
   return AP4_SUCCESS;
 }
 
-AP4_UI32 WV_CencSingleSampleDecrypter::AddPool()
+AP4_UI32 WV_CencSingleSampleDecrypter::AddPool(const AP4_UI08 *key, const AP4_DataBuffer &pssh)
 {
   for (size_t i(0); i < fragment_pool_.size(); ++i)
     if (fragment_pool_[i].nal_length_size_ == 99)
@@ -1332,7 +1332,7 @@ public:
     return cdmsession_->GetCdmAdapter() != nullptr;
   }
 
-  virtual AP4_CencSingleSampleDecrypter *CreateSingleSampleDecrypter(AP4_DataBuffer &pssh, const char *optionalKeyParameter, const uint8_t *defaultkeyid) override
+  virtual AP4_CencSingleSampleDecrypter *CreateSingleSampleDecrypter(const AP4_DataBuffer &pssh, const char *optionalKeyParameter, const uint8_t *defaultkeyid) override
   {
     WV_CencSingleSampleDecrypter *decrypter = new WV_CencSingleSampleDecrypter(*cdmsession_, pssh, defaultkeyid);
     if (!decrypter->GetSessionId())
