@@ -124,6 +124,12 @@ WV_DRM::WV_DRM(WV_KEYSYSTEM ks, const char* licenseURL, const AP4_DataBuffer &se
   AMediaDrm_getPropertyString(media_drm_, "securityLevel", &property);
   std::string strSecurityLevel(property? property : "unknown");
 
+  if (key_system_ == WIDEVINE)
+  {
+    AMediaDrm_setPropertyString(media_drm_, "privacyMode", "enable");
+    AMediaDrm_setPropertyString(media_drm_, "sessionSharing", "enable");
+  }
+
   Log(SSD_HOST::LL_DEBUG, "Successful instanciated media_drm: %p, deviceid: %s, security-level: %s", media_drm_, strDeviceId.c_str(), strSecurityLevel.c_str());
 
   media_status_t status;
@@ -191,10 +197,11 @@ public:
   void GetCapabilities(const uint8_t *keyid, uint32_t media, SSD_DECRYPTER::SSD_CAPS &caps);
 
   void RequestProvision() { provisionRequested = true; };
-  void RequestNewKeys();
+  void RequestNewKeys() { keyUpdateRequested = true; };
 
 private:
   bool ProvisionRequest();
+  void KeyUpdateRequest();
   bool SendSessionMessage(AMediaDrmByteArray &session_id, const uint8_t* key_request, size_t key_request_size);
 
   WV_DRM &media_drm_;
@@ -204,7 +211,7 @@ private:
   AMediaDrmByteArray session_id_;
   AMediaDrmKeySetId keySetId;
   char session_id_char_[128];
-  bool provisionRequested;
+  bool provisionRequested, keyUpdateRequested;
 
   const uint8_t *key_request_;
   size_t key_request_size_;
@@ -234,7 +241,7 @@ std::vector<SESSION> sessions;
 
 void MediaDrmEventListener(AMediaDrm *media_drm, const AMediaDrmSessionId *sessionId, AMediaDrmEventType eventType, int extra, const uint8_t *data, size_t dataSize)
 {
-  Log(SSD_HOST::LL_DEBUG, "EVENT occured drm:%p, event:%d extra:%d dataSize;%d", media_drm, eventType, extra, dataSize);
+  Log(SSD_HOST::LL_DEBUG, "EVENT occured drm:%p, event:%d extra:%d data:%p dataSize;%d", media_drm, eventType, extra, data, dataSize);
   bool foundOne(false);
   for (auto &ses : sessions)
     if (ses.media_drm == media_drm && (sessionId->length == 0 || (ses.sessionId->length == sessionId->length && memcmp(ses.sessionId->ptr, sessionId->ptr, sessionId->length) == 0)))
@@ -260,6 +267,7 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(WV_DRM &drm, AP4_Data
   : AP4_CencSingleSampleDecrypter(0)
   , media_drm_(drm)
   , provisionRequested(false)
+  , keyUpdateRequested(false)
   , key_request_(nullptr)
   , key_request_size_(0)
   , hdcp_limit_(0)
@@ -343,12 +351,15 @@ TRYAGAIN:
       goto FAILWITHSESSION;
   }
 
-  Log(SSD_HOST::LL_DEBUG, "Key request successful");
+  Log(SSD_HOST::LL_DEBUG, "Key request successful size: %ld", key_request_size_);
 
   if (!SendSessionMessage(session_id_, key_request_, key_request_size_))
     goto FAILWITHSESSION;
 
-  Log(SSD_HOST::LL_DEBUG, "License update successful, keySetId: %u", keySetId);
+  if (keyUpdateRequested)
+    KeyUpdateRequest();
+  else
+    Log(SSD_HOST::LL_DEBUG, "License update successful, keySetId: %u", keySetId);
 
   memcpy(session_id_char_, session_id_.ptr, session_id_.length);
   session_id_char_[session_id_.length] = 0;
@@ -442,17 +453,21 @@ bool WV_CencSingleSampleDecrypter::ProvisionRequest()
   return status == AMEDIA_OK;;
 }
 
-void WV_CencSingleSampleDecrypter::RequestNewKeys()
+void WV_CencSingleSampleDecrypter::KeyUpdateRequest()
 {
+  keyUpdateRequested = false;
+
+  AMediaDrmKeyValuePair kv;
+
   media_status_t status = AMediaDrm_getKeyRequest(media_drm_.GetMediaDrm(), &session_id_,
-    nullptr, 0, "", KEY_TYPE_STREAMING, nullptr, 0 , &key_request_, &key_request_size_);
+    nullptr, 0, "video/mp4", KEY_TYPE_STREAMING, &kv, 0 , &key_request_, &key_request_size_);
 
   if (status != AMEDIA_OK || !key_request_size_)
   {
     Log(SSD_HOST::LL_ERROR, "Key request not successful (%d)", status);
     return;
   }
-  Log(SSD_HOST::LL_DEBUG, "Key request successful (size: %lu", key_request_size_);
+  Log(SSD_HOST::LL_DEBUG, "Key request successful size: %lu", key_request_size_);
 
   if (!SendSessionMessage(session_id_, key_request_, key_request_size_))
     return;
@@ -502,7 +517,7 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage(AMediaDrmByteArray &sessio
   //Set our std headers
   host->CURLAddOption(file, SSD_HOST::OPTION_PROTOCOL, "acceptencoding", "gzip, deflate");
   host->CURLAddOption(file, SSD_HOST::OPTION_PROTOCOL, "seekable", "0");
-  host->CURLAddOption(file, SSD_HOST::OPTION_HEADER, "Expect", "");
+  //host->CURLAddOption(file, SSD_HOST::OPTION_HEADER, "Expect", "");
 
   //Process headers
   headers = split(blocks[1], '&');
@@ -739,6 +754,9 @@ AP4_Result WV_CencSingleSampleDecrypter::SetFragmentInfo(AP4_UI32 pool_id, const
   fragment_pool_[pool_id].nal_length_size_ = nal_length_size;
   fragment_pool_[pool_id].annexb_sps_pps_.SetData(annexb_sps_pps.GetData(), annexb_sps_pps.GetDataSize());
   fragment_pool_[pool_id].decrypter_flags_ = flags;
+
+  if (keyUpdateRequested)
+    KeyUpdateRequest();
 
   return AP4_SUCCESS;
 }
