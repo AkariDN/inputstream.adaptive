@@ -32,6 +32,7 @@ if(CORE_SYSTEM_NAME STREQUAL android)
 	wvdecrypter_android.cpp
 	jsmn.c
 	../src/helpers.cpp
+  ../src/md5.cpp
   )
 else()
   if(WIN32)
@@ -49,6 +50,7 @@ else()
         wvdecrypter.cpp
         jsmn.c
         ../src/helpers.cpp
+        ../src/md5.cpp
         cdm/base/native_library.cc
         cdm/base/native_library_${CDMTYPE}
         cdm/media/cdm/cdm_adapter.cc
