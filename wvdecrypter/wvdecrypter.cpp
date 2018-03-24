@@ -682,7 +682,7 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage()
     MD5 md5;
     md5.update(challenge_.GetData(), challenge_.GetDataSize());
     md5.finalize();
-    blocks[0].replace(insPos - 1, 6, md5.hexdigest());
+    blocks[0].replace(insPos, 6, md5.hexdigest());
   }
 
   void* file = host->CURLCreate(blocks[0].c_str());

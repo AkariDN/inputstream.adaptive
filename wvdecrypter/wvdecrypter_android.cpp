@@ -458,10 +458,8 @@ void WV_CencSingleSampleDecrypter::KeyUpdateRequest()
 {
   keyUpdateRequested = false;
 
-  AMediaDrmKeyValuePair kv;
-
   media_status_t status = AMediaDrm_getKeyRequest(media_drm_.GetMediaDrm(), &session_id_,
-    nullptr, 0, "video/mp4", KEY_TYPE_STREAMING, &kv, 0 , &key_request_, &key_request_size_);
+    nullptr, 0, "video/mp4", KEY_TYPE_STREAMING, nullptr, 0 , &key_request_, &key_request_size_);
 
   if (status != AMEDIA_OK || !key_request_size_)
   {
@@ -515,7 +513,7 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage(AMediaDrmByteArray &sessio
     MD5 md5;
     md5.update(key_request, key_request_size);
     md5.finalize();
-    blocks[0].replace(insPos - 1, 6, md5.hexdigest());
+    blocks[0].replace(insPos, 6, md5.hexdigest());
   }
 
   void* file = host->CURLCreate(blocks[0].c_str());
@@ -527,7 +525,7 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage(AMediaDrmByteArray &sessio
   //Set our std headers
   host->CURLAddOption(file, SSD_HOST::OPTION_PROTOCOL, "acceptencoding", "gzip, deflate");
   host->CURLAddOption(file, SSD_HOST::OPTION_PROTOCOL, "seekable", "0");
-  //host->CURLAddOption(file, SSD_HOST::OPTION_HEADER, "Expect", "");
+  host->CURLAddOption(file, SSD_HOST::OPTION_HEADER, "Expect", "");
 
   //Process headers
   headers = split(blocks[1], '&');
