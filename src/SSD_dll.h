@@ -19,6 +19,7 @@ namespace SSD
     };
     static const uint32_t version = 9;
 
+    virtual const char *GetPlatformProperty(const char *name) = 0;
     virtual const char *GetLibraryPath() const = 0;
     virtual const char *GetProfilePath() const = 0;
     virtual void* CURLCreate(const char* strURL) = 0;

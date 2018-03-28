@@ -74,6 +74,12 @@ kodi host - interface for decrypter libraries
 class KodiHost : public SSD::SSD_HOST
 {
 public:
+  virtual const char *GetPlatformProperty(const char *name) override
+  {
+    m_platformInfo = kodi::GetPlatformProperty(name);
+    return m_platformInfo.c_str();
+  };
+
   virtual const char *GetLibraryPath() const override
   {
     return m_strLibraryPath.c_str();
@@ -169,7 +175,7 @@ public:
   }
 
 private:
-  std::string m_strProfilePath, m_strLibraryPath;
+  std::string m_strProfilePath, m_strLibraryPath, m_platformInfo;
 }kodihost;
 
 /*******************************************************
