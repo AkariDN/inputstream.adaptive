@@ -17,7 +17,6 @@
 */
 
 #include "jni/src/MediaDrm.h"
-#include "jni/src/MediaDrmKeyRequest.h"
 #include "jni/src/MediaDrmOnEventListener.h"
 #include "jni/src/UUID.h"
 
@@ -58,8 +57,6 @@ enum WV_KEYSYSTEM
   WIDEVINE,
   PLAYREADY
 };
-
-//TODO void MediaDrmEventListener(AMediaDrm *media_drm, const AMediaDrmSessionId *sessionId, AMediaDrmEventType eventType, int extra, const uint8_t *data, size_t dataSize);
 
 class WV_DRM
 {
@@ -158,15 +155,6 @@ WV_DRM::WV_DRM(WV_KEYSYSTEM ks, const char* licenseURL, const AP4_DataBuffer &se
 
   media_drm_->setOnEventListener(*listener);
 
-  /*media_status_t status;
-  if ((status = AMediaDrm_setOnEventListener(media_drm_, MediaDrmEventListener)) != AMEDIA_OK)
-  {
-    Log(SSD_HOST::LL_ERROR, "Unable to install Event Listener (%d)", status);
-    AMediaDrm_release(media_drm_);
-    media_drm_ = 0;
-    return;
-  }*/
-
   if (license_url_.find('|') == std::string::npos)
   {
     if (key_system_ == WIDEVINE)
@@ -195,8 +183,7 @@ public:
   WV_CencSingleSampleDecrypter(WV_DRM &drm, AP4_DataBuffer &pssh, const char *optionalKeyParameter, const uint8_t* defaultKeyId);
   ~WV_CencSingleSampleDecrypter();
 
-  size_t CreateSession(AP4_DataBuffer &pssh);
-  void CloseSession(size_t sessionhandle);
+  bool StartSession() { return KeyUpdateRequest(true); };
   const std::vector<char> &GetSessionIdRaw() { return session_id_; };
   virtual const char *GetSessionId() override;
   virtual bool HasLicenseKey(const uint8_t *keyid);
@@ -228,12 +215,12 @@ public:
 
 private:
   bool ProvisionRequest();
-  void KeyUpdateRequest();
+  bool KeyUpdateRequest(bool waitForKeys);
   bool SendSessionMessage(const std::vector<char> &keyRequestData);
 
   WV_DRM &media_drm_;
   std::vector<char> pssh_;
-  std::string optionalKeyParameter_;
+  std::map<std::string, std::string> optParams_;
 
   std::vector<char> session_id_;
   std::vector<char> keySetId_;
@@ -253,28 +240,6 @@ private:
   std::vector<FINFO> fragment_pool_;
   AP4_UI32 hdcp_limit_;
 };
-
-//TODO 
-/*void MediaDrmEventListener(AMediaDrm *media_drm, const AMediaDrmSessionId *sessionId, AMediaDrmEventType eventType, int extra, const uint8_t *data, size_t dataSize)
-{
-  Log(SSD_HOST::LL_DEBUG, "EVENT occured drm:%p, event:%d extra:%d data:%p dataSize;%d", media_drm, eventType, extra, data, dataSize);
-  bool foundOne(false);
-  for (auto &ses : sessions)
-    if (ses.media_drm == media_drm && (sessionId->length == 0 || (ses.sessionId->length == sessionId->length && memcmp(ses.sessionId->ptr, sessionId->ptr, sessionId->length) == 0)))
-    {
-      if (eventType == EVENT_PROVISION_REQUIRED)
-        ses.decrypter->RequestProvision();
-      else if (eventType == EVENT_KEY_REQUIRED)
-        ses.decrypter->RequestNewKeys();
-      foundOne = true;
-    }
-  if (!foundOne)
-  {
-    std::string sessionStr(reinterpret_cast<const char*>(sessionId->ptr),sessionId->length);
-    Log(SSD_HOST::LL_ERROR, "DRM EVENT: session not found: %s", sessionStr.c_str());
-  }
-}
-*/
 
 /*----------------------------------------------------------------------
 |   WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter
@@ -326,12 +291,8 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(WV_DRM &drm, AP4_Data
   else
     memset(defaultKeyId_, 0, 16);
 
-  std::map<std::string, std::string> optParams;
   if (optionalKeyParameter)
-  {
-    optionalKeyParameter_ = optionalKeyParameter;
-    optParams["PRCustomData"] = optionalKeyParameter_;
-  }
+    optParams_["PRCustomData"] = optionalKeyParameter;
 
   session_id_ = media_drm_.GetMediaDrm()->openSession();
   if (session_id_.size() == 0)
@@ -342,44 +303,6 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(WV_DRM &drm, AP4_Data
 
   memcpy(session_id_char_, session_id_.data(), session_id_.size());
   session_id_char_[session_id_.size()] = 0;
-
-  jni::CJNIMediaDrmKeyRequest keyRequest = media_drm_.GetMediaDrm()->getKeyRequest(session_id_, pssh_, "video/mp4", jni::CJNIMediaDrm::KEY_TYPE_STREAMING, optParams);
-
-  if (xbmc_jnienv()->ExceptionCheck())
-  {
-    Log(SSD_HOST::LL_INFO, "Exception in initial getKeyRequest, do Provisionhandling");
-    xbmc_jnienv()->ExceptionClear();
-    ProvisionRequest();
-    return;
-  }
-
-  std::vector<char> keyRequestData = keyRequest.getData();
-
-  if (keyRequestData.empty())
-  {
-    Log(SSD_HOST::LL_ERROR, "Key request not successful");
-    goto FAILWITHSESSION;
-  }
-
-  Log(SSD_HOST::LL_DEBUG, "Key request successful size: %ld, type: %d", keyRequestData.size(), keyRequest.getRequestType());
-
-  if (!SendSessionMessage(keyRequestData))
-    goto FAILWITHSESSION;
-
-  Log(SSD_HOST::LL_DEBUG, "License update successful (initial)");
-
-  std::this_thread::sleep_for (std::chrono::seconds(1));
-
-  KeyUpdateRequest();
-
-  return;
-
-
-FAILWITHSESSION:
-  media_drm_.GetMediaDrm()->closeSession(session_id_);
-  session_id_.clear();
-
-  return;
 }
 
 WV_CencSingleSampleDecrypter::~WV_CencSingleSampleDecrypter()
@@ -417,29 +340,29 @@ void WV_CencSingleSampleDecrypter::GetCapabilities(const uint8_t *keyid, uint32_
 
 bool WV_CencSingleSampleDecrypter::ProvisionRequest()
 {
-//TODO
-/*
-  const char *url(0);
-  size_t prov_size(4096);
+  Log(SSD_HOST::LL_ERROR, "PrivisionData request: drm:%p" , media_drm_.GetMediaDrm());
 
-  Log(SSD_HOST::LL_ERROR, "PrivisionData request: drm:%p key_request_size_: %u", media_drm_.GetMediaDrm(), key_request_size_);
+  jni::CJNIMediaDrmProvisionRequest request = media_drm_.GetMediaDrm()->getProvisionRequest();
 
-  media_status_t status = AMediaDrm_getProvisionRequest(media_drm_.GetMediaDrm(), &key_request_, &prov_size, &url);
-
-  if (status != AMEDIA_OK || !url)
+  if (xbmc_jnienv()->ExceptionCheck())
   {
-    Log(SSD_HOST::LL_ERROR, "PrivisionData request failed with status: %d", status);
+    Log(SSD_HOST::LL_ERROR, "Exception on getProvisionRequest");
+    xbmc_jnienv()->ExceptionClear();
     return false;
   }
-  Log(SSD_HOST::LL_DEBUG, "PrivisionData: status: %d, size: %u, url: %s", status, prov_size, url);
+
+  std::vector<char> provData = request.getData();
+  std::string url = request.getDefaultUrl();
+
+  Log(SSD_HOST::LL_DEBUG, "PrivisionData: size: %lu, url: %s", provData.size(), url.c_str());
 
   std::string tmp_str("{\"signedRequest\":\"");
-  tmp_str += std::string(reinterpret_cast<const char*>(key_request_), prov_size);
+  tmp_str += std::string(provData.data(), provData.size());
   tmp_str += "\"}";
 
-  std::string encoded = b64_encode(reinterpret_cast<const unsigned char*>(tmp_str.data()), tmp_str.size(), false);
+  std::string encoded = b64_encode(reinterpret_cast<const uint8_t*>(tmp_str.data()), tmp_str.size(), false);
 
-  void* file = host->CURLCreate(url);
+  void* file = host->CURLCreate(url.c_str());
   host->CURLAddOption(file, SSD_HOST::OPTION_PROTOCOL, "Content-Type", "application/json");
   host->CURLAddOption(file, SSD_HOST::OPTION_PROTOCOL, "seekable", "0");
   host->CURLAddOption(file, SSD_HOST::OPTION_PROTOCOL, "postdata", encoded.c_str());
@@ -449,43 +372,70 @@ bool WV_CencSingleSampleDecrypter::ProvisionRequest()
     Log(SSD_HOST::LL_ERROR, "Provisioning server returned failure");
     return false;
   }
-  tmp_str.clear();
+  provData.clear();
   char buf[8192];
   size_t nbRead;
 
   // read the file
   while ((nbRead = host->ReadFile(file, buf, 8192)) > 0)
-    tmp_str += std::string((const char*)buf, nbRead);
+    provData.insert(provData.end(), buf, buf + nbRead);
 
-  status = AMediaDrm_provideProvisionResponse(media_drm_.GetMediaDrm(), reinterpret_cast<const uint8_t *>(tmp_str.c_str()), tmp_str.size());
-
-  Log(SSD_HOST::LL_DEBUG, "provideProvisionResponse: status %d", status);
-  return status == AMEDIA_OK;;
-*/
-  return true;
-}
-
-void WV_CencSingleSampleDecrypter::KeyUpdateRequest()
-{
-  keyUpdateRequested = false;
-
-  jni::CJNIMediaDrmKeyRequest keyRequest = media_drm_.GetMediaDrm()->getKeyRequest(session_id_, std::vector<char>(),
-    "video/mp4", jni::CJNIMediaDrm::KEY_TYPE_STREAMING, std::map<std::string, std::string>());
+  media_drm_.GetMediaDrm()->provideProvisionResponse(provData);
 
   if (xbmc_jnienv()->ExceptionCheck())
   {
-    Log(SSD_HOST::LL_ERROR, "Key request not successful");
+    Log(SSD_HOST::LL_ERROR, "Exception on provideProvisionResponse");
     xbmc_jnienv()->ExceptionClear();
-    return;
+    return false;
   }
+  return true;
+}
+
+bool WV_CencSingleSampleDecrypter::KeyUpdateRequest(bool waitKeys)
+{
+  keyUpdateRequested = false;
+
+  jni::CJNIMediaDrmKeyRequest keyRequest = media_drm_.GetMediaDrm()->getKeyRequest(session_id_, pssh_,
+    "video/mp4", jni::CJNIMediaDrm::KEY_TYPE_STREAMING, optParams_);
+
+  if (xbmc_jnienv()->ExceptionCheck())
+  {
+    xbmc_jnienv()->ExceptionClear();
+    if (!provisionRequested)
+    {
+      Log(SSD_HOST::LL_INFO, "Key request not successful - trying provisioning");
+      provisionRequested = true;
+      return KeyUpdateRequest(waitKeys);
+    }
+    else
+      Log(SSD_HOST::LL_ERROR, "Key request not successful");
+    return false;
+  }
+
+  pssh_.clear();
+  optParams_.clear();
 
   std::vector<char> keyRequestData = keyRequest.getData();
   Log(SSD_HOST::LL_DEBUG, "Key request successful size: %lu, type:%d", keyRequestData.size(), keyRequest.getRequestType());
 
   if (!SendSessionMessage(keyRequestData))
-    return;
+    return false;
 
+  if (waitKeys && keyRequestData.size() == 2) // Service Certificate call
+  {
+    for (unsigned int i(0); i < 100 && !keyUpdateRequested; ++i)
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+    if (keyUpdateRequested)
+      KeyUpdateRequest(false);
+    else
+    {
+      Log(SSD_HOST::LL_ERROR, "Timeout waiting for EVENT_KEYS_REQUIRED!");
+      return false;
+    }
+  }
   Log(SSD_HOST::LL_DEBUG, "License update successful");
+  return true;
 }
 
 bool WV_CencSingleSampleDecrypter::SendSessionMessage(const std::vector<char> &keyRequestData)
@@ -784,7 +734,7 @@ AP4_Result WV_CencSingleSampleDecrypter::SetFragmentInfo(AP4_UI32 pool_id, const
   fragment_pool_[pool_id].decrypter_flags_ = flags;
 
   if (keyUpdateRequested)
-    KeyUpdateRequest();
+    KeyUpdateRequest(false);
 
   return AP4_SUCCESS;
 }
@@ -1011,15 +961,16 @@ public:
   virtual AP4_CencSingleSampleDecrypter *CreateSingleSampleDecrypter(AP4_DataBuffer &pssh, const char *optionalKeyParameter, const uint8_t *defaultkeyid) override
   {
     WV_CencSingleSampleDecrypter *decrypter = new WV_CencSingleSampleDecrypter(*cdmsession_, pssh, optionalKeyParameter, defaultkeyid);
-    if (!decrypter->GetSessionId())
-    {
-      delete decrypter;
-      decrypter = nullptr;
-    }
-    else
+
     {
       std::lock_guard<std::mutex> lk(decrypterListMutex);
       decrypterList.push_back(decrypter);
+    }
+
+    if (!(*decrypter->GetSessionId() && decrypter->StartSession()))
+    {
+      DestroySingleSampleDecrypter(decrypter);
+      return nullptr;
     }
     return decrypter;
   }
@@ -1069,12 +1020,23 @@ public:
 
   virtual void onEvent(const jni::CJNIMediaDrm &mediaDrm, const std::vector<char> &sessionId, int event, int extra, const std::vector<char> &data) override
   {
-    Log(SSD_HOST::LL_DEBUG, "EVENT: %d arrived!", event);
+    Log(SSD_HOST::LL_DEBUG, "EVENT: %d arrived, #decrypter: %lu", event, decrypterList.size());
     //we have only one DRM system running (cdmsession_) so there is no need to compare mediaDrm
     std::lock_guard<std::mutex> lk(decrypterListMutex);
     for (std::vector<WV_CencSingleSampleDecrypter*>::iterator b(decrypterList.begin()), e(decrypterList.end()); b != e; ++b)
       if (sessionId.empty() || (*b)->GetSessionIdRaw() == sessionId)
       {
+        switch (event)
+        {
+          case jni::CJNIMediaDrm::EVENT_KEY_REQUIRED:
+            (*b)->RequestNewKeys();
+            break;
+          default:;
+        }
+      }
+      else
+      {
+        Log(SSD_HOST::LL_DEBUG, "Session does not match: sizes: %lu -> %lu", sessionId.size(), (*b)->GetSessionIdRaw().size());
       }
   }
 

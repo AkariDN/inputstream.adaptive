@@ -20,7 +20,6 @@
 
 #include "ClassLoader.h"
 #include "jutils-details.hpp"
-#include "Log.h"
 
 using namespace jni;
 
@@ -28,7 +27,6 @@ CJNIClassLoader::CJNIClassLoader(const std::string &dexPath)
   : CJNIBase("dalvik/system/PathClassLoader")
 {
   jhobject systemLoader = call_static_method<jhobject>("java/lang/ClassLoader", "getSystemClassLoader", "()Ljava/lang/ClassLoader;");
-  Log(0,"XXXXXX systemClassLoader: %p", jobject(systemLoader));
 
   m_object = new_object(GetClassName(), "<init>", "(Ljava/lang/String;Ljava/lang/ClassLoader;)V",
     jcast<jhstring>(dexPath), systemLoader);

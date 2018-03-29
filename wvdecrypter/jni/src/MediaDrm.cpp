@@ -147,6 +147,25 @@ std::vector<char> CJNIMediaDrm::provideKeyResponse(const std::vector<char> &scop
   return result;
 }
 
+CJNIMediaDrmProvisionRequest CJNIMediaDrm::getProvisionRequest() const
+{
+  return call_method<jhobject>(m_object,
+      "getProvisionRequest", "()Landroid/media/MediaDrm$ProvisionRequest;");
+}
+
+void CJNIMediaDrm::provideProvisionResponse(const std::vector<char> &response) const
+{
+  JNIEnv *env = xbmc_jnienv();
+
+  jsize size = response.size();
+  jbyteArray response_ = env->NewByteArray(size);
+  jbyte *bytedata = (jbyte*)response.data();
+  env->SetByteArrayRegion(response_, 0, size, bytedata);
+
+  call_method<void>(m_object,
+    "provideProvisionResponse", "([B)V", response_);
+}
+
 void CJNIMediaDrm::removeKeys(const std::vector<char> &sessionId) const
 {
   JNIEnv *env = xbmc_jnienv();

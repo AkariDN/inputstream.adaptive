@@ -86,18 +86,20 @@ struct jcast_helper<std::vector<char>, jbyteArray>
     {
         JNIEnv *env = xbmc_jnienv();
         jsize size = 0;
-        if(v)
-            size = env->GetArrayLength(v);
-
         std::vector<char> vec;
-        vec.reserve(size);
-
-        jbyte *elements = env->GetByteArrayElements(v, NULL);
-        for (int i = 0; i < size; i++)
+        if(v)
         {
+          size = env->GetArrayLength(v);
+
+          vec.reserve(size);
+
+          jbyte *elements = env->GetByteArrayElements(v, NULL);
+          for (int i = 0; i < size; i++)
+          {
             vec.emplace_back(static_cast<char>(elements[i]));
+          }
+          env->ReleaseByteArrayElements(v, elements, JNI_ABORT);
         }
-        env->ReleaseByteArrayElements(v, elements, JNI_ABORT);
         return vec;
     }
 };

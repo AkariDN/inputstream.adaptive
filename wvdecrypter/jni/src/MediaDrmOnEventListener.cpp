@@ -22,8 +22,6 @@
 #include "MediaDrm.h"
 #include "ClassLoader.h"
 #include "jutils-details.hpp"
-#include "Log.h"
-//#include "Context.h"
 
 using namespace jni;
 
@@ -43,8 +41,6 @@ CJNIMediaDrmOnEventListener::CJNIMediaDrmOnEventListener(const std::string &dexP
 
   m_object = new_object(clazz);
   m_object.setGlobal();
-
-  Log(0, "CJNIMediaDrmOnEventListener object: %p, class: %p", jobject(m_object), jclass(clazz));
 
   add_instance(m_object, this);
 }
