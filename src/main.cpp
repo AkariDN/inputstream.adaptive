@@ -46,6 +46,10 @@
 #include <dlfcn.h>              // linux+osx
 #endif
 
+#if defined(ANDROID)
+#include <kodi/platform/android/System.h>
+#endif
+
 #define DVD_TIME_BASE 1000000
 
 #undef CreateDirectory
@@ -74,12 +78,18 @@ kodi host - interface for decrypter libraries
 class KodiHost : public SSD::SSD_HOST
 {
 public:
-  virtual const char *GetPlatformProperty(const char *name) override
+#if defined(ANDROID)
+  virtual void *GetJNIEnv() override
   {
-    m_platformInfo = kodi::GetPlatformProperty(name);
-    return m_platformInfo.c_str();
+    return m_androidSystem.GetJNIEnv();
   };
 
+  virtual int GetSDKVersion() override
+  {
+    return m_androidSystem.GetSDKVersion();
+  };
+
+#endif
   virtual const char *GetLibraryPath() const override
   {
     return m_strLibraryPath.c_str();
@@ -175,8 +185,13 @@ public:
   }
 
 private:
-  std::string m_strProfilePath, m_strLibraryPath, m_platformInfo;
-}kodihost;
+  std::string m_strProfilePath, m_strLibraryPath;
+
+#if defined(ANDROID)
+  kodi::platform::CInterfaceAndroidSystem m_androidSystem = static_cast<AddonToKodiFuncTable_android_system*>
+    (kodi::GetInterface(INTERFACE_ANDROID_SYSTEM_NAME, INTERFACE_ANDROID_SYSTEM_VERSION));
+#endif
+}*kodihost;
 
 /*******************************************************
 Bento4 Streams
@@ -1648,7 +1663,7 @@ void Session::GetSupportedDecrypterURN(std::string &key_system)
     kodi::Log(ADDON_LOG_DEBUG, "DECRYPTERPATH not specified in settings.xml");
     return;
   }
-  kodihost.SetLibraryPath(kodi::vfs::TranslateSpecialProtocol(specialpath).c_str());
+  kodihost->SetLibraryPath(kodi::vfs::TranslateSpecialProtocol(specialpath).c_str());
 
   std::vector<std::string> searchPaths(2);
 #ifdef ANDROID
@@ -1678,7 +1693,7 @@ void Session::GetSupportedDecrypterURN(std::string &key_system)
         CreateDecryptorInstanceFunc startup;
         if ((startup = (CreateDecryptorInstanceFunc)dlsym(mod, "CreateDecryptorInstance")))
         {
-          SSD::SSD_DECRYPTER *decrypter = startup(&kodihost, SSD::SSD_HOST::version);
+          SSD::SSD_DECRYPTER *decrypter = startup(kodihost, SSD::SSD_HOST::version);
           const char *suppUrn(0);
 
           if (decrypter && (suppUrn = decrypter->SelectKeySytem(license_type_.c_str())))
@@ -2480,7 +2495,7 @@ bool CInputStreamAdaptive::Open(INPUTSTREAM& props)
     mpd_url = mpd_url.substr(0, posHeader);
   }
 
-  kodihost.SetProfilePath(props.m_profileFolder);
+  kodihost->SetProfilePath(props.m_profileFolder);
 
   m_session = std::shared_ptr<Session>(new Session(manifest, mpd_url.c_str(), mfup, lt, lk, ld, lsc, manh, medh, props.m_profileFolder, m_width, m_height));
   m_session->SetVideoResolution(m_width, m_height);
@@ -2952,11 +2967,18 @@ class CMyAddon
 {
 public:
   CMyAddon();
+  virtual ~CMyAddon();
   virtual ADDON_STATUS CreateInstance(int instanceType, std::string instanceID, KODI_HANDLE instance, KODI_HANDLE& addonInstance) override;
 };
 
 CMyAddon::CMyAddon()
 {
+  kodihost = nullptr;;
+}
+
+CMyAddon::~CMyAddon()
+{
+  delete kodihost;
 }
 
 ADDON_STATUS CMyAddon::CreateInstance(int instanceType, std::string instanceID, KODI_HANDLE instance, KODI_HANDLE& addonInstance)
@@ -2964,6 +2986,7 @@ ADDON_STATUS CMyAddon::CreateInstance(int instanceType, std::string instanceID, 
   if (instanceType == ADDON_INSTANCE_INPUTSTREAM)
   {
     addonInstance = new CInputStreamAdaptive(instance);
+    kodihost = new KodiHost();
     return ADDON_STATUS_OK;
   }
   return ADDON_STATUS_NOT_IMPLEMENTED;

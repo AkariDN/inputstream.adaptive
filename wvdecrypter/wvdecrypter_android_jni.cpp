@@ -1055,10 +1055,7 @@ private:
 
 JNIEnv* xbmc_jnienv()
 {
-  std::string strEnv = host->GetPlatformProperty("jni_env");
-  JNIEnv *env = nullptr;
-  sscanf(strEnv.c_str(),"%p", &env);
-  return env;
+  return static_cast<JNIEnv*>(host->GetJNIEnv());
 }
 
 extern "C" {
@@ -1075,8 +1072,7 @@ extern "C" {
       return 0;
     host = h;
 
-    std::string sdkVersionStr(host->GetPlatformProperty("sdk_version"));
-    CJNIBase::SetSDKVersion(atoi(sdkVersionStr.c_str()));
+    CJNIBase::SetSDKVersion(host->GetSDKVersion());
 
     Log(SSD_HOST::LL_DEBUG, "WVDecrypter JNI, SDK version: %d", CJNIBase::GetSDKVersion());
 
