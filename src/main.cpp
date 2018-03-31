@@ -188,8 +188,7 @@ private:
   std::string m_strProfilePath, m_strLibraryPath;
 
 #if defined(ANDROID)
-  kodi::platform::CInterfaceAndroidSystem m_androidSystem = static_cast<AddonToKodiFuncTable_android_system*>
-    (kodi::GetInterface(INTERFACE_ANDROID_SYSTEM_NAME, INTERFACE_ANDROID_SYSTEM_VERSION));
+  kodi::platform::CInterfaceAndroidSystem m_androidSystem;
 #endif
 }*kodihost;
 
