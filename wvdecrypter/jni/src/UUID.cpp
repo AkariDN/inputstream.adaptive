@@ -1,6 +1,6 @@
 /*
- *      Copyright (C) 2016-2016 peak3d
- *      http://www.peak3d.de
+ *      Copyright (C) 2016 Team Kodi
+ *      http://xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -12,16 +12,22 @@
  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
  *  GNU General Public License for more details.
  *
+ *  You should have received a copy of the GNU General Public License
+ *  along with XBMC; see the file COPYING.  If not, see
  *  <http://www.gnu.org/licenses/>.
  *
  */
 
-#pragma once
 
-#include <time.h>
+#include "UUID.h"
 
-#ifndef _WIN32
-#define stricmp strcasecmp
-#define strnicmp strncasecmp
-time_t _mkgmtime(struct tm *tm);
-#endif
+#include "jutils-details.hpp"
+
+using namespace jni;
+
+CJNIUUID::CJNIUUID(int64_t mostSigBits, int64_t leastSigBits)
+  : CJNIBase("java/util/UUID")
+{
+  m_object = new_object(GetClassName(), "<init>", "(JJ)V", mostSigBits, leastSigBits);
+  m_object.setGlobal();
+}

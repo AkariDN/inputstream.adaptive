@@ -1,6 +1,7 @@
+#pragma once
 /*
- *      Copyright (C) 2016-2016 peak3d
- *      http://www.peak3d.de
+ *      Copyright (C) 2018 Team XBMC
+ *      http://xbmc.org
  *
  *  This Program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -12,16 +13,26 @@
  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
  *  GNU General Public License for more details.
  *
+ *  You should have received a copy of the GNU General Public License
+ *  along with XBMC; see the file COPYING.  If not, see
  *  <http://www.gnu.org/licenses/>.
  *
  */
 
-#pragma once
+#include "JNIBase.h"
 
-#include <time.h>
+namespace jni
+{
 
-#ifndef _WIN32
-#define stricmp strcasecmp
-#define strnicmp strncasecmp
-time_t _mkgmtime(struct tm *tm);
-#endif
+class CJNIMediaDrmKeyRequest : public CJNIBase
+{
+public:
+  CJNIMediaDrmKeyRequest();
+  CJNIMediaDrmKeyRequest(const jni::jhobject &object) : CJNIBase(object) {};
+
+  std::vector<char> getData() const;
+  int getRequestType() const;
+};
+
+}
+
